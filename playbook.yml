@@ -1,0 +1,104 @@
+---
+- name: Instalando Zabbix 6.0 LTS
+  hosts: localhost
+  vars: 
+    - dbName: zabbix
+    - dbUser: zabbix
+    - dbPass: Z4bb1x
+    - timezone: America/Recife
+    - lang: pt_BR
+
+  tasks:
+    - name: Instalando repositório do Zabbix 6.0 LTS
+      become: yes
+      apt:
+        deb: https://repo.zabbix.com/zabbix/6.0/debian/pool/main/z/zabbix-release/zabbix-release_6.0-1+debian11_all.deb
+
+    - name: Instalando pacotes do Zabbix
+      become: yes
+      apt:
+        name:
+          - zabbix-server-mysql
+          - zabbix-frontend-php
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+          - mariadb-server
+        state: present
+        update_cache: yes
+
+    - name: Instalando idioma PT-BR
+      locale_gen:
+        name: pt_BR.UTF-8
+        state: present
+
+    - name: Criando banco de dados do Zabbix
+      mysql_db:
+        name: "{{ dbName }}"
+        encoding: utf8mb4
+        collation: utf8mb4_bin
+        login_user: root
+        login_password: root
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+    - name: Criando usuário do zabbix no banco de dados
+      mysql_user:
+        login_user: root
+        login_password: root
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: "{{ dbUser }}"
+        password: "{{ dbPass }}"
+        priv: '*.*:ALL'
+        state: present
+
+    - name: Descompactando arquivo server.sql.gz
+      command: gunzip /usr/share/doc/zabbix-sql-scripts/mysql/server.sql.gz
+
+    - name: Importando banco de dados
+      mysql_db:
+        name: "{{ dbName }}"
+        login_user: "{{ dbUser }}"
+        login_password: "{{ dbPass }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        encoding: utf8mb4
+        collation: utf8mb4_bin
+        target: /usr/share/doc/zabbix-sql-scripts/mysql/server.sql
+        state: import
+
+    - name: Atualizando idioma e timezone
+      mysql_query:
+        login_db: "{{ dbName }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        query: UPDATE users SET timezone = %(timezone)s , lang = %(lang)s WHERE userid = 1;
+        named_args:
+          timezone: "{{ timezone }}"
+          lang: "{{ lang }}"
+
+    - name: Deletando server.sql
+      file:
+        path: /usr/share/doc/zabbix-sql-scripts/mysql/server.sql
+        state: absent
+
+    - name: Configurando zabbix_server.conf
+      become: yes
+      template:
+        src: template/zabbix_server.conf
+        dest: /etc/zabbix/zabbix_server.conf
+
+    - name: Configurando zabbix.conf.php
+      become: yes
+      template:
+        src: template/zabbix.conf.php
+        dest: /usr/share/zabbix/conf/zabbix.conf.php
+
+    - name: Iniciando serviços do Zabbix e Apache
+      become: yes
+      service:
+        name: "{{ item }}"
+        state: restarted
+        enabled: yes
+      loop:  
+        - zabbix-server
+        - zabbix-agent
+        - apache2
